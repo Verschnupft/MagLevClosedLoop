@@ -15,7 +15,7 @@ CONFIG = ClosedLoopConfig(
   ),
   duration_s=0.1,
   estimator="gauss_newton",  # or "oracle": simulator ground truth as pose feedback
-  motion_filter="kalman",  # or "difference": raw pose and backward-difference velocity
+  motion_filter="kalman",  # or "lowpass": low-pass-filtered difference, or "difference": raw backward difference
 )
 
 AXES = ("x_mm", "y_mm", "z_mm", "roll_deg", "pitch_deg", "yaw_deg")

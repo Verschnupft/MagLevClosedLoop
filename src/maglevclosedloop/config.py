@@ -25,6 +25,13 @@ class KalmanConfig:
 
 
 @dataclass(frozen=True)
+class LowPassConfig:
+  """First-order low-pass on the differenced velocity. Untuned starting value."""
+
+  cutoff_hz: float = 200.0
+
+
+@dataclass(frozen=True)
 class CascadedPidConfig:
   """Position P loop around a velocity PID loop per axis. Gains are the IMC-tuned values of MagLevWhiteBox."""
 
@@ -62,13 +69,14 @@ class ClosedLoopConfig:
   )
   duration_s: float = 0.1
   estimator: str = "gauss_newton"  # "gauss_newton" or "oracle" (simulator ground truth)
-  motion_filter: str = "kalman"  # pose and velocity for the controller: "kalman" or "difference"
+  motion_filter: str = "kalman"  # pose and velocity for the controller: "kalman", "lowpass" or "difference"
   sensor_noise_std_counts: float = 0.0
   device: str | None = None  # simulator device; None picks CUDA when available
   seed: int = 0
 
   gauss_newton: GaussNewtonConfig = field(default_factory=GaussNewtonConfig)
   kalman: KalmanConfig = field(default_factory=KalmanConfig)
+  lowpass: LowPassConfig = field(default_factory=LowPassConfig)
   controller: CascadedPidConfig = field(default_factory=CascadedPidConfig)
   actuation: HalbachActuationConfig = field(default_factory=HalbachActuationConfig)
 

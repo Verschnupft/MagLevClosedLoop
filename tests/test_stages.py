@@ -3,10 +3,10 @@ import torch
 from maglevsim import MagLevSim, ZeroController
 
 from maglevclosedloop.actuation import HalbachDqActuation
-from maglevclosedloop.config import ClosedLoopConfig, KalmanConfig
+from maglevclosedloop.config import ClosedLoopConfig, KalmanConfig, LowPassConfig
 from maglevclosedloop.control import CascadedPidController
 from maglevclosedloop.estimation import GaussNewtonPoseEstimator
-from maglevclosedloop.motion import FiniteDifferenceFilter, LinearKalmanFilter
+from maglevclosedloop.motion import FiniteDifferenceFilter, LinearKalmanFilter, LowPassDifferenceFilter
 from maglevclosedloop.reference import PiecewiseConstantReference
 
 HOVER = (120.0, 120.0, 4.0, 0.0, 0.0, 0.0)
@@ -30,6 +30,7 @@ def test_controller_at_rest_outputs_feed_forward_only():
 
 @pytest.mark.parametrize("make_filter", [
   lambda dt: LinearKalmanFilter(KalmanConfig(), dt),
+  lambda dt: LowPassDifferenceFilter(LowPassConfig(), dt),
   lambda dt: FiniteDifferenceFilter(dt),
 ])
 def test_motion_filter_tracks_a_constant_velocity_ramp(make_filter):
@@ -44,21 +45,25 @@ def test_motion_filter_tracks_a_constant_velocity_ramp(make_filter):
   assert torch.allclose(pose, start + velocity * 199 * dt, atol=1e-4)
 
 
-def test_kalman_filter_smooths_measurement_noise():
+@pytest.mark.parametrize("make_filter", [
+  lambda dt, noise_std: LinearKalmanFilter(KalmanConfig(measurement_std=(noise_std,) * 6), dt),
+  lambda dt, noise_std: LowPassDifferenceFilter(LowPassConfig(), dt),
+])
+def test_smoothing_filters_reduce_velocity_noise(make_filter):
   dt = 250e-6
   torch.manual_seed(0)
   start = torch.tensor(HOVER, dtype=torch.float64)
   noise_std = 1e-3
-  kalman = LinearKalmanFilter(KalmanConfig(measurement_std=(noise_std,) * 6), dt)
+  smoothing = make_filter(dt, noise_std)
   difference = FiniteDifferenceFilter(dt)
-  kalman.reset(start)
+  smoothing.reset(start)
   difference.reset(start)
-  kalman_velocity, difference_velocity = [], []
+  smoothed_velocity, difference_velocity = [], []
   for _ in range(2000):
     measurement = start + noise_std * torch.randn(6, dtype=torch.float64)
-    kalman_velocity.append(kalman.update(measurement)[1])
+    smoothed_velocity.append(smoothing.update(measurement)[1])
     difference_velocity.append(difference.update(measurement)[1])
-  assert torch.stack(kalman_velocity[1000:]).std() < 0.5 * torch.stack(difference_velocity[1000:]).std()
+  assert torch.stack(smoothed_velocity[1000:]).std() < 0.5 * torch.stack(difference_velocity[1000:]).std()
 
 
 def test_actuation_lift_only_uses_d_current_under_the_arrays():

@@ -40,7 +40,7 @@ flowchart LR
 | Reference | `pose_mmdeg(time_s)` | `PiecewiseConstantReference` | new |
 | Compensation | `compensate(hall, currents)` | `NoCoilFieldCompensation` (pass-through) | new |
 | Pose estimation | `estimate(hall)` | `GaussNewtonPoseEstimator` | MagLevPoseEstimation (finite cuboid model with Hall element offsets) |
-| Motion filter | `update(pose)` → pose, velocity | `LinearKalmanFilter` (constant velocity) or `FiniteDifferenceFilter` | new |
+| Motion filter | `update(pose)` → pose, velocity | `LinearKalmanFilter` (constant velocity), `LowPassDifferenceFilter` or `FiniteDifferenceFilter` | new |
 | Control | `compute(pose, velocity, reference)` | `CascadedPidController` | MagLevWhiteBox (`MimoController`) |
 | Actuation | `compute(wrench, pose)` | `HalbachDqActuation` | MagLevWhiteBox (`ForceTransform`) |
 
@@ -48,6 +48,7 @@ flowchart LR
 
 The motion filter supplies the controller with pose and velocity (`motion_filter` switch).
 `FiniteDifferenceFilter` passes the pose through and differentiates it; this amplifies estimation noise.
+`LowPassDifferenceFilter` smooths that difference with a first-order low-pass (`cutoff_hz`); the pose stays unfiltered.
 `LinearKalmanFilter` estimates pose and velocity per axis with a constant-velocity model and smooths the noise.
 
 ## Interfaces
@@ -94,6 +95,7 @@ classDiagram
   PoseEstimator <|.. GaussNewtonPoseEstimator
   PoseEstimator <|.. OracleEstimator
   MotionFilter <|.. LinearKalmanFilter
+  MotionFilter <|.. LowPassDifferenceFilter
   MotionFilter <|.. FiniteDifferenceFilter
   Controller <|.. CascadedPidController
   Actuation <|.. HalbachDqActuation
@@ -143,6 +145,7 @@ flowchart TD
   CFG -- "plant()" --> PLANT["maglevsim.SimConfig<br/>grid, noise, device, initial pose"]
   CFG --> GN[GaussNewtonConfig]
   CFG --> KF[KalmanConfig]
+  CFG --> LP[LowPassConfig]
   CFG --> PID[CascadedPidConfig]
   CFG --> HAL[HalbachActuationConfig]
   FAC["factory.build_closed_loop()"]

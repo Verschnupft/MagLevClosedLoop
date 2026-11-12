@@ -1,6 +1,8 @@
+import math
+
 import torch
 
-from .config import KalmanConfig
+from .config import KalmanConfig, LowPassConfig
 
 
 class FiniteDifferenceFilter:
@@ -18,6 +20,24 @@ class FiniteDifferenceFilter:
     velocity = (pose - self._previous) / self.dt_s
     self._previous = pose
     return pose, velocity
+
+
+class LowPassDifferenceFilter:
+  """Pass the pose through; velocity is the backward difference smoothed by a first-order low-pass."""
+
+  def __init__(self, config: LowPassConfig, dt_s: float) -> None:
+    self._difference = FiniteDifferenceFilter(dt_s)
+    time_constant_s = 1.0 / (2.0 * math.pi * config.cutoff_hz)
+    self._alpha = dt_s / (time_constant_s + dt_s)
+
+  def reset(self, initial_pose_mmdeg: torch.Tensor) -> None:
+    self._difference.reset(initial_pose_mmdeg)
+    self._velocity = torch.zeros(6, dtype=torch.float64)
+
+  def update(self, pose_mmdeg: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    pose, raw_velocity = self._difference.update(pose_mmdeg)
+    self._velocity = self._velocity + self._alpha * (raw_velocity - self._velocity)
+    return pose, self._velocity
 
 
 class LinearKalmanFilter:

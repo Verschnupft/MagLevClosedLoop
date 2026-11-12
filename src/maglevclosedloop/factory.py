@@ -7,7 +7,7 @@ from .config import ClosedLoopConfig
 from .control import CascadedPidController
 from .estimation import GaussNewtonPoseEstimator, OracleEstimator
 from .loop import ClosedLoop
-from .motion import FiniteDifferenceFilter, LinearKalmanFilter
+from .motion import FiniteDifferenceFilter, LinearKalmanFilter, LowPassDifferenceFilter
 from .reference import PiecewiseConstantReference
 
 
@@ -26,6 +26,8 @@ def build_closed_loop(config: ClosedLoopConfig) -> ClosedLoop:
 
   if config.motion_filter == "kalman":
     motion_filter = LinearKalmanFilter(config.kalman, dt_s=plant.dt)
+  elif config.motion_filter == "lowpass":
+    motion_filter = LowPassDifferenceFilter(config.lowpass, dt_s=plant.dt)
   elif config.motion_filter == "difference":
     motion_filter = FiniteDifferenceFilter(dt_s=plant.dt)
   else:
