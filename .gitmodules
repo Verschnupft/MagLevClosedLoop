@@ -1,0 +1,3 @@
+[submodule "external/MagLevSim"]
+	path = external/MagLevSim
+	url = https://github.com/PhilippH18/MagLevSim.git

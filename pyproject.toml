@@ -1,0 +1,40 @@
+[project]
+name = "maglevclosedloop"
+version = "0.1.0"
+description = "Minimal, modular closed-loop control for the MagLevSim magnetic-levitation planar motor"
+readme = "README.md"
+authors = [
+    { name = "Merlin Scholz", email = "101355089+Verschnupft@users.noreply.github.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "maglevsim",
+    "numpy>=2.5.2",
+    "torch>=2.13.0",
+]
+
+[build-system]
+requires = ["uv_build>=0.12.5,<0.13.0"]
+build-backend = "uv_build"
+
+[[tool.uv.index]]
+url = "https://download.pytorch.org/whl/cu132"
+
+[tool.uv.workspace]
+members = [
+    "external/MagLevSim",
+]
+
+[tool.uv.sources]
+maglevsim = { workspace = true, editable = true }
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+    "ruff>=0.16.3",
+]
+
+[tool.ruff]
+indent-width = 2
+line-length = 120
+extend-exclude = ["external"]
