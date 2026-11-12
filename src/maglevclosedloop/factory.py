@@ -32,7 +32,9 @@ def build_closed_loop(config: ClosedLoopConfig) -> ClosedLoop:
     raise ValueError(f"Unknown estimator {config.estimator!r}")
 
   if config.motion_filter == "kalman":
-    motion_filter = LinearKalmanFilter(config.kalman, dt_s=plant.dt)
+    # R and Q belong to the estimator; the oracle uses the Gauss-Newton tuning.
+    kalman = config.neural.kalman if config.estimator == "neural" else config.gauss_newton.kalman
+    motion_filter = LinearKalmanFilter(kalman, dt_s=plant.dt)
   elif config.motion_filter == "lowpass":
     motion_filter = LowPassDifferenceFilter(config.lowpass, dt_s=plant.dt)
   elif config.motion_filter == "difference":

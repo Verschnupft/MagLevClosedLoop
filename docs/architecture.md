@@ -1,5 +1,7 @@
 # Architecture
 
+For a short view with only the interfaces, see [architecture_overview.md](architecture_overview.md).
+
 ## Goal
 
 The repository closes one control loop around the MagLevSim planar motor with the least code possible.
@@ -40,7 +42,7 @@ flowchart LR
 | Reference | `pose_mmdeg(time_s)` | `PiecewiseConstantReference` | new |
 | Compensation | `compensate(hall, currents)` | `NoCoilFieldCompensation` (pass-through) | new |
 | Pose estimation | `estimate(hall)` | `GaussNewtonPoseEstimator` or `NeuralPoseEstimator` | MagLevPoseEstimation (finite cuboid model with Hall element offsets; trained networks) |
-| Motion filter | `update(pose)` → pose, velocity | `LinearKalmanFilter` (constant velocity), `LowPassDifferenceFilter` or `FiniteDifferenceFilter` | new |
+| Motion filter | `update(pose)` → pose, velocity | `LinearKalmanFilter` (constant acceleration), `LowPassDifferenceFilter` or `FiniteDifferenceFilter` | MagLevPoseEstimation (`kf_ca_const_*`); low-pass and difference new |
 | Control | `compute(pose, velocity, reference)` | `CascadedPidController` | MagLevWhiteBox (`MimoController`) |
 | Actuation | `compute(wrench, pose)` | `HalbachDqActuation` | MagLevWhiteBox (`ForceTransform`) |
 
@@ -49,7 +51,22 @@ flowchart LR
 The motion filter supplies the controller with pose and velocity (`motion_filter` switch).
 `FiniteDifferenceFilter` passes the pose through and differentiates it; this amplifies estimation noise.
 `LowPassDifferenceFilter` smooths that difference with a first-order low-pass (`cutoff_hz`); the pose stays unfiltered.
-`LinearKalmanFilter` estimates pose and velocity per axis with a constant-velocity model and smooths the noise.
+`LinearKalmanFilter` estimates pose and velocity per axis with a constant-acceleration (or constant-velocity) model and smooths the noise.
+
+### Kalman filter parameters
+
+The filter is the same as `kf_ca_const_*` in MagLevPoseEstimation (`filtering/ekf.py`): constant acceleration, continuous white-noise process covariance Q, constant measurement covariance R, Joseph-form update. All values are SI (m, rad).
+
+R describes the estimator, so each estimator config holds its own `KalmanConfig`:
+
+| Estimator | Config | Tuned entry in `filter_tuning_seed20261029.json` |
+|---|---|---|
+| Gauss-Newton (and oracle) | `GaussNewtonConfig.kalman` (= `KalmanConfig` defaults) | `kf_ca_const_cpp_parallel_taylor_1_element_offsets` |
+| Neural (log MLP) | `NeuralConfig.kalman` | `kf_ca_const_singleframe_log_mlp_700k` |
+
+The values were fitted in MagLevPoseEstimation on `data/filter_tuning_seed20261029/motion` with 4 counts Hall noise (notebooks `experiments/05_hold_*` and `06_motion_*`): R from the estimator residuals, Q per axis group by minimal rollout RMSE.
+The values minimize the open-loop estimation error. In the closed loop their phase lag is too large: with the oracle estimator and these values the mover falls; with Q scaled by 10^6 it hovers but overshoots (z +0.33 mm). Closed-loop values still need tuning.
+Differences to the tuned setting: the Gauss-Newton estimator here iterates to convergence instead of one Taylor step; the estimators start from their own previous estimate, not from the filter prediction; the yaw branch alignment is not ported.
 
 ## Neural pose estimation
 
@@ -78,8 +95,7 @@ flowchart LR
 Checkpoints live in `checkpoints/`. `scripts/slim_checkpoint.py` reduces a training checkpoint from MagLevPoseEstimation to the inference part and keeps the run name for provenance.
 `checkpoints/logmlp_seed42.pt` is run `final_logmlp_mlp_2048-2048-1024_lr1e-4_cosine1000_seed42_1m` (best model, epoch 1000).
 
-A neural estimator inside a Kalman filter is the combination `estimator="neural"` and `motion_filter="kalman"`.
-Set `KalmanConfig.measurement_std` to the network error (test RMSE of this checkpoint: about 0.015 mm and 0.015 deg).
+A neural estimator inside a Kalman filter is the combination `estimator="neural"` and `motion_filter="kalman"`; the filter then uses `NeuralConfig.kalman`.
 
 ## Interfaces
 
@@ -176,7 +192,8 @@ flowchart TD
   CFG -- "plant()" --> PLANT["maglevsim.SimConfig<br/>grid, noise, device, initial pose"]
   CFG --> GN[GaussNewtonConfig]
   CFG --> NC[NeuralConfig]
-  CFG --> KF[KalmanConfig]
+  GN --> KF1[KalmanConfig]
+  NC --> KF2[KalmanConfig]
   CFG --> LP[LowPassConfig]
   CFG --> PID[CascadedPidConfig]
   CFG --> HAL[HalbachActuationConfig]

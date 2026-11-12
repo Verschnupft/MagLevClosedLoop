@@ -10,23 +10,42 @@ Axes = tuple[float, float, float, float, float, float]  # x, y, z, roll, pitch, 
 
 
 @dataclass(frozen=True)
+class KalmanConfig:
+  """Linear Kalman filter on the estimated pose, as `kf_ca_const_*` in MagLevPoseEstimation (`filtering/ekf.py`).
+
+  SI units per axis (m or rad). Defaults: tuned for `cpp_parallel_taylor_1_element_offsets` on
+  `data/filter_tuning_seed20261029/motion` with 4 counts Hall noise
+  (`outputs/experiments/cache/filter_tuning/filter_tuning_seed20261029.json`).
+  """
+
+  motion_model: str = "ca"  # "cv" (constant velocity) or "ca" (constant acceleration)
+  process_psd: Axes = (0.0031622776601683794,) * 2 + (3.16227766016838e-05,) + (0.00963284861489642,) * 2 + (2.46740110027234,)
+  measurement_std: Axes = (
+    1.1056229422976008e-05, 1.101094220165291e-05, 7.978981556683469e-06,
+    0.00022124804641882796, 0.0002189659578039589, 0.00026183501017451225,
+  )
+  initial_rate_std: Axes = (0.1, 0.1, 0.005, math.radians(5.0), math.radians(5.0), math.radians(90.0))
+  initial_acceleration_std: Axes = (0.2, 0.2, 0.02, math.radians(20.0), math.radians(20.0), math.radians(180.0))
+
+
+@dataclass(frozen=True)
 class GaussNewtonConfig:
   max_iterations: int = 5
   step_tolerance: float = 1e-10  # norm of the pose update in m and rad
+  kalman: KalmanConfig = field(default_factory=KalmanConfig)
 
 
 @dataclass(frozen=True)
 class NeuralConfig:
   checkpoint_path: str = "checkpoints/logmlp_seed42.pt"  # relative to the repository root, or absolute
-
-
-@dataclass(frozen=True)
-class KalmanConfig:
-  """Constant-velocity Kalman filter. Units per axis: mm or deg. Untuned starting values."""
-
-  measurement_std: Axes = (1e-3,) * 6  # std of the pose estimate
-  acceleration_std: Axes = (1e4,) * 6  # per s^2; larger = faster, less smoothing
-  initial_velocity_std: Axes = (1.0,) * 6  # per s
+  # Tuned for kf_ca_const_singleframe_log_mlp_700k, same tuning run as the KalmanConfig defaults.
+  kalman: KalmanConfig = field(default_factory=lambda: KalmanConfig(
+    process_psd=(0.0031622776601683794,) * 2 + (3.1622776601683795e-05,) + (0.009632848614896418,) * 2 + (2.4674011002723395,),
+    measurement_std=(
+      1.2666369508505687e-05, 1.2598174756307578e-05, 8.371159495135733e-06,
+      0.00023530468227360503, 0.00023252118927479657, 0.00030102620063297424,
+    ),
+  ))
 
 
 @dataclass(frozen=True)
@@ -75,13 +94,12 @@ class ClosedLoopConfig:
   duration_s: float = 0.1
   estimator: str = "gauss_newton"  # "gauss_newton", "neural", or "oracle" (simulator ground truth)
   motion_filter: str = "kalman"  # pose and velocity for the controller: "kalman", "lowpass" or "difference"
-  sensor_noise_std_counts: float = 0.0
+  sensor_noise_std_counts: float = 4.0
   device: str | None = None  # simulator device; None picks CUDA when available
   seed: int = 0
 
   gauss_newton: GaussNewtonConfig = field(default_factory=GaussNewtonConfig)
   neural: NeuralConfig = field(default_factory=NeuralConfig)
-  kalman: KalmanConfig = field(default_factory=KalmanConfig)
   lowpass: LowPassConfig = field(default_factory=LowPassConfig)
   controller: CascadedPidConfig = field(default_factory=CascadedPidConfig)
   actuation: HalbachActuationConfig = field(default_factory=HalbachActuationConfig)

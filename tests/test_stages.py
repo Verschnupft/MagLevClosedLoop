@@ -14,6 +14,7 @@ HOVER = (120.0, 120.0, 4.0, 0.0, 0.0, 0.0)
 
 @pytest.mark.parametrize("make_filter", [
   lambda dt: LinearKalmanFilter(KalmanConfig(), dt),
+  lambda dt: LinearKalmanFilter(KalmanConfig(motion_model="cv"), dt),
   lambda dt: LowPassDifferenceFilter(LowPassConfig(), dt),
   lambda dt: FiniteDifferenceFilter(dt),
 ])
@@ -23,14 +24,15 @@ def test_motion_filter_tracks_a_constant_velocity_ramp(make_filter):
   start = torch.tensor(HOVER, dtype=torch.float64)
   motion_filter = make_filter(dt)
   motion_filter.reset(start)
-  for k in range(1, 200):
+  steps = 2000  # 0.5 s; the tuned CA filter smooths strongly and settles slowly in z and tilt
+  for k in range(1, steps + 1):
     pose, estimated_velocity = motion_filter.update(start + velocity * k * dt)
   assert torch.allclose(estimated_velocity, velocity, rtol=1e-3)
-  assert torch.allclose(pose, start + velocity * 199 * dt, atol=1e-4)
+  assert torch.allclose(pose, start + velocity * steps * dt, atol=1e-4)
 
 
 @pytest.mark.parametrize("make_filter", [
-  lambda dt, noise_std: LinearKalmanFilter(KalmanConfig(measurement_std=(noise_std,) * 6), dt),
+  lambda dt, noise_std: LinearKalmanFilter(KalmanConfig(), dt),
   lambda dt, noise_std: LowPassDifferenceFilter(LowPassConfig(), dt),
 ])
 def test_smoothing_filters_reduce_velocity_noise(make_filter):
@@ -99,7 +101,7 @@ def test_estimators_work_on_a_grid(name):
 
 def test_estimators_match_the_simulator():
   pose = (121.3, 118.7, 4.2, 0.3, -0.2, 1.5)
-  config = ClosedLoopConfig(device="cpu")
+  config = ClosedLoopConfig(device="cpu", sensor_noise_std_counts=0.0)  # exact model comparison
   sim = MagLevSim(config=config.plant(), controller=ZeroController())
   sim.reset(pose)  # coils are off at reset, so the Hall data holds only the mover field
   for name, tolerance in TOLERANCE.items():

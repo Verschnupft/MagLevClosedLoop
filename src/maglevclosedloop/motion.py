@@ -41,30 +41,49 @@ class LowPassDifferenceFilter:
 
 
 class LinearKalmanFilter:
-  """Linear Kalman filter with a constant-velocity model, one independent 2-state filter per axis.
+  """Linear Kalman filter on the estimated pose with a constant-velocity (CV) or constant-acceleration (CA) model.
 
-  State per axis: [pose, velocity]. Measurement: the estimated pose.
-  Process noise: white acceleration with standard deviation `acceleration_std` (discrete model).
+  Port of MagLevPoseEstimation `ConstantMotionModel` + `PoseMeasurement` (`filtering/ekf.py`): continuous white-noise
+  process covariance, constant R, Joseph-form update, first measurement sets the pose with covariance R.
+  F, Q, P0 and R are block diagonal there, so this runs one independent filter per axis. Internally SI (m, rad).
+  Not ported: the 90-degree yaw branch alignment of the measurement; the estimators here keep yaw continuous.
   """
 
+  _SI = torch.tensor([1e-3] * 3 + [math.pi / 180.0] * 3, dtype=torch.float64)  # mm, deg -> m, rad
+
   def __init__(self, config: KalmanConfig, dt_s: float) -> None:
-    dt = dt_s
-    self._f = torch.tensor([[1.0, dt], [0.0, 1.0]], dtype=torch.float64)
-    g = torch.tensor([dt * dt / 2.0, dt], dtype=torch.float64)
-    acceleration_var = torch.tensor(config.acceleration_std, dtype=torch.float64) ** 2
-    self._q = acceleration_var[:, None, None] * torch.outer(g, g)  # (axis, 2, 2)
+    t = dt_s
+    if config.motion_model == "cv":
+      f = [[1, t], [0, 1]]
+      q = [[t**3 / 3, t**2 / 2], [t**2 / 2, t]]
+      rate_std = [config.initial_rate_std]
+    elif config.motion_model == "ca":
+      f = [[1, t, t**2 / 2], [0, 1, t], [0, 0, 1]]
+      q = [[t**5 / 20, t**4 / 8, t**3 / 6], [t**4 / 8, t**3 / 3, t**2 / 2], [t**3 / 6, t**2 / 2, t]]
+      rate_std = [config.initial_rate_std, config.initial_acceleration_std]
+    else:
+      raise ValueError(f"Unknown motion model {config.motion_model!r}")
+    self._f = torch.tensor(f, dtype=torch.float64)
+    self._q = torch.tensor(config.process_psd, dtype=torch.float64)[:, None, None] * torch.tensor(q, dtype=torch.float64)
     self._r = torch.tensor(config.measurement_std, dtype=torch.float64) ** 2
-    self._initial_velocity_var = torch.tensor(config.initial_velocity_std, dtype=torch.float64) ** 2
+    self._rate_var = torch.tensor(rate_std, dtype=torch.float64).T ** 2  # (axis, order)
 
   def reset(self, initial_pose_mmdeg: torch.Tensor) -> None:
-    self._x = torch.stack([torch.as_tensor(initial_pose_mmdeg, dtype=torch.float64), torch.zeros(6, dtype=torch.float64)], -1)
-    self._p = torch.diag_embed(torch.stack([self._r, self._initial_velocity_var], -1))
+    self._x = torch.zeros(6, len(self._f), dtype=torch.float64)
+    self._x[:, 0] = torch.as_tensor(initial_pose_mmdeg, dtype=torch.float64) * self._SI
+    self._started = False
 
   def update(self, pose_mmdeg: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-    x = self._x @ self._f.T
-    p = self._f @ self._p @ self._f.T + self._q
-    gain = p[..., :, 0] / (p[..., 0, 0] + self._r)[:, None]  # H = [1, 0]
-    x = x + gain * (torch.as_tensor(pose_mmdeg, dtype=torch.float64) - x[:, 0])[:, None]
-    self._p = p - gain[..., :, None] * p[..., 0, None, :]
-    self._x = x
-    return x[:, 0].clone(), x[:, 1].clone()
+    z = torch.as_tensor(pose_mmdeg, dtype=torch.float64) * self._SI
+    if not self._started:
+      self._x[:, 0] = z
+      self._p = torch.diag_embed(torch.cat([self._r[:, None], self._rate_var], -1))
+      self._started = True
+    else:
+      x = self._x @ self._f.T
+      p = self._f @ self._p @ self._f.T + self._q
+      gain = p[:, :, 0] / (p[:, 0, 0] + self._r)[:, None]  # H = [1, 0, ...]
+      self._x = x + gain * (z - x[:, 0])[:, None]
+      a = torch.eye(len(self._f), dtype=torch.float64) - gain[:, :, None] * torch.eye(len(self._f), dtype=torch.float64)[0]
+      self._p = a @ p @ a.transpose(1, 2) + self._r[:, None, None] * gain[:, :, None] * gain[:, None, :]  # Joseph form
+    return self._x[:, 0] / self._SI, self._x[:, 1] / self._SI
