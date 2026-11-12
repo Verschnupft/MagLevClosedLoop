@@ -35,6 +35,7 @@ class KalmanConfig:
 class GaussNewtonConfig:
   max_iterations: int = 1  # 1: one first-order step per cycle, as cpp_parallel_taylor_1 in MagLevPoseEstimation
   step_tolerance: float = 1e-10  # norm of the pose update in m and rad; ends the iteration early
+  cuda_graph: bool = True  # replay the linearization as a CUDA graph when CUDA is available
   kalman: KalmanConfig = field(default_factory=KalmanConfig)
 
 
