@@ -60,12 +60,14 @@ flowchart LR
 |---|---|---|---|
 | Reference | `pose_mmdeg(time_s)` | `PiecewiseConstantReference` | new |
 | Compensation | `compensate(hall, currents)` | `NoCoilFieldCompensation` (pass-through) | new |
-| Pose estimation | `estimate(hall)` | `GaussNewtonPoseEstimator` or `NeuralPoseEstimator` | MagLevPoseEstimation (finite cuboid model with Hall element offsets; trained networks) |
+| Pose estimation | `estimate(hall, prior, initial)` | `GaussNewtonPoseEstimator` or `NeuralPoseEstimator` | MagLevPoseEstimation (finite cuboid model with Hall element offsets; trained networks) |
 | Motion filter | `update(pose)` → pose, velocity | `LinearKalmanFilter` (constant acceleration), `LowPassDifferenceFilter` or `FiniteDifferenceFilter` | MagLevPoseEstimation (`kf_ca_const_*`); low-pass and difference new |
 | Control | `compute(pose, velocity, reference)` | `CascadedPidController`, gains by IMC (`control/imc.py`) | MagLevWhiteBox (`MimoController`, `ImcPidTuning`) |
 | Actuation | `compute(wrench, pose)` | `HalbachDqActuation` | MagLevWhiteBox (`ForceTransform`) |
 
 With `coil_field_in_hall=False` (default) the plant uses `SimConfig.scaling_const_stator = 0`. The Hall data then hold only the mover field; the coil forces stay unchanged. The compensation stage is a pass-through until the coil field is switched on.
+
+Current limits: MagLevSim limits each coil to |(d, q)| <= 19000 increments (d and q scaled together) and derates a tile above its power limit. The actuation applies the coil limit itself with lift priority (d first, q gets the rest) and returns the wrench the limited currents achieve. The controller uses it for anti-windup by back-calculation (k_aw = ki / kp). The tile power derating is not mirrored; it acts only far above hover power.
 
 `OracleEstimator` returns the simulator ground truth (`estimator="oracle"`). Use it to test the other stages without estimation error.
 
@@ -96,7 +98,18 @@ Therefore Q follows the controller by default (`filtering/bandwidth.py`, `Kalman
 
 R stays the tuned estimator value. `bandwidth_factor=None` uses the tuned `process_psd` instead.
 
-Differences to the tuned setting: the Gauss-Newton estimator here iterates to convergence instead of one Taylor step; the estimators start from their own previous estimate, not from the filter prediction; the yaw branch alignment is not ported.
+Coupling as `FilteredPoseEstimator` in MagLevPoseEstimation, per cycle: the filter predicts; the estimator works on the sensor window around the last filtered pose and starts from the prediction (Gauss-Newton start value, network yaw branch); the filter moves the measurement to the yaw branch of the prediction, wraps the roll and pitch innovations, and updates. The first measurement sets the pose with covariance R.
+
+| Method in `notebooks/experiments` (hold, motion) | `ClosedLoopConfig` |
+|---|---|
+| `cpp_parallel_taylor_1_element_offsets` | `estimator="gauss_newton"`, `motion_filter="lowpass"` or `"difference"` (only for the velocity) |
+| `kf_ca_const_cpp_parallel_taylor_1_element_offsets` | `estimator="gauss_newton"`, `motion_filter="kalman"` |
+| `singleframe_log_mlp_700k` | `estimator="neural"`, `motion_filter="lowpass"` or `"difference"` |
+| `kf_ca_const_singleframe_log_mlp_700k` | `estimator="neural"`, `motion_filter="kalman"` |
+
+Without the Kalman filter the prediction is the last pose, as in the notebook rollouts.
+
+Remaining difference to the notebooks: Q follows the controller (bandwidth rule) instead of the open-loop tuning. The Gauss-Newton step runs in PyTorch, not in the C++ code of `cpp_parallel_taylor_1`.
 
 ### Controller tuning
 
@@ -124,8 +137,8 @@ flowchart LR
   H["Hall counts (T,50,3)"] --> W["sensor window<br/>50 sensors under the mover<br/>(plant.py)"]
   W --> N["input standardization"] --> NET["network<br/>(any nn.Module)"] --> D["output de-standardization"] --> DEC["decode<br/>(any callable)"]
   DEC --> P["pose (6,) + window offset"]
-  PREV["previous pose"] --> W
-  PREV --> DEC
+  PRIOR["prior: last loop pose"] --> W
+  INIT["initial: filter prediction"] --> DEC
 ```
 
 | Part | Source | Default |
@@ -161,12 +174,12 @@ classDiagram
   }
   class PoseEstimator {
     <<Protocol>>
-    reset(initial_pose_mmdeg)
-    estimate(hall_counts) Tensor
+    estimate(hall_counts, prior_mmdeg, initial_mmdeg) Tensor
   }
   class MotionFilter {
     <<Protocol>>
     reset(initial_pose_mmdeg)
+    predict() Tensor
     update(pose_mmdeg) pose, velocity
   }
   class Controller {
@@ -219,7 +232,9 @@ sequenceDiagram
   S-->>L: Hall counts, coil currents
   L->>C: compensate(hall, currents)
   C-->>L: mover-only Hall counts
-  L->>E: estimate(hall)
+  L->>M: predict()
+  M-->>L: prediction
+  L->>E: estimate(hall, last pose, prediction)
   E-->>L: pose estimate
   L->>M: update(pose estimate)
   M-->>L: pose, velocity
@@ -270,7 +285,7 @@ Units change only inside a stage. `plant.py` is the only module that uses MagLev
 
 No stage is limited to one tile:
 
-- The Gauss-Newton estimator uses the sensors of all tiles in one least-squares problem.
+- The Gauss-Newton estimator uses the 50-sensor window under the mover, as the network does.
 - The neural estimator uses the 50-sensor window under the mover, which can span tiles.
 - The actuation checks the coils of all tiles against the four Halbach arrays.
 - The motion filter and the controller work on the global pose only.

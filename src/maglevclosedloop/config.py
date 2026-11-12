@@ -33,8 +33,8 @@ class KalmanConfig:
 
 @dataclass(frozen=True)
 class GaussNewtonConfig:
-  max_iterations: int = 5
-  step_tolerance: float = 1e-10  # norm of the pose update in m and rad
+  max_iterations: int = 1  # 1: one first-order step per cycle, as cpp_parallel_taylor_1 in MagLevPoseEstimation
+  step_tolerance: float = 1e-10  # norm of the pose update in m and rad; ends the iteration early
   kalman: KalmanConfig = field(default_factory=KalmanConfig)
 
 

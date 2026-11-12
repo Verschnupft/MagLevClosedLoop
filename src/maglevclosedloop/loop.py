@@ -44,11 +44,12 @@ class ClosedLoop:
   def run(self, cycles: int, initial_pose_mmdeg) -> LoopLog:
     initial_pose = torch.as_tensor(initial_pose_mmdeg, dtype=torch.float64)
     self.sim.reset(initial_pose)
-    self.estimator.reset(initial_pose)
     self.motion_filter.reset(initial_pose)
+    pose = initial_pose  # the first prior is the known start pose
     self.controller.reset()
 
     command = torch.zeros((self.sim.tile_count, 24, 3), dtype=torch.float64)
+    achieved_wrench = None
     rows = {name: [] for name in LoopLog.__dataclass_fields__}
     for cycle in range(cycles):
       time_s = cycle * self.sim.config.dt
@@ -58,10 +59,11 @@ class ClosedLoop:
       result = self.sim.step(reference, command_dqphi=command)
 
       hall = self.compensation.compensate(result.hall_sensor_measurements, result.currents_abc)
-      estimated_pose = self.estimator.estimate(hall)
+      # As FilteredPoseEstimator in MagLevPoseEstimation: predict, estimate from the prediction, update.
+      estimated_pose = self.estimator.estimate(hall, pose, self.motion_filter.predict())
       pose, velocity = self.motion_filter.update(estimated_pose)
-      wrench = self.controller.compute(pose, velocity, reference)
-      command = self.actuation.compute(wrench, pose)
+      wrench = self.controller.compute(pose, velocity, reference, achieved_wrench)
+      command, achieved_wrench = self.actuation.compute(wrench, pose)
 
       values = (torch.tensor(time_s), reference, measured_pose, estimated_pose, pose, velocity, wrench, command)
       for name, value in zip(rows, values, strict=True):

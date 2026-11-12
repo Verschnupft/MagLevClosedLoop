@@ -3,6 +3,7 @@ import math
 import torch
 
 from ..config import KalmanConfig
+from ..rotation import align_yaw_branch
 
 
 class LinearKalmanFilter:
@@ -10,8 +11,9 @@ class LinearKalmanFilter:
 
   Port of MagLevPoseEstimation `ConstantMotionModel` + `PoseMeasurement` (`filtering/ekf.py`): continuous white-noise
   process covariance, constant R, Joseph-form update, first measurement sets the pose with covariance R.
+  Each measurement moves to the 90-degree yaw branch nearest the prediction; roll and pitch innovations wrap.
   F, Q, P0 and R are block diagonal there, so this runs one independent filter per axis. Internally SI (m, rad).
-  Not ported: the 90-degree yaw branch alignment of the measurement; the estimators here keep yaw continuous.
+  Cycle as `FilteredPoseEstimator`: `predict` (the estimator starts from it), then `update` with the estimate.
   """
 
   _SI = torch.tensor([1e-3] * 3 + [math.pi / 180.0] * 3, dtype=torch.float64)  # mm, deg -> m, rad
@@ -38,17 +40,25 @@ class LinearKalmanFilter:
     self._x[:, 0] = torch.as_tensor(initial_pose_mmdeg, dtype=torch.float64) * self._SI
     self._started = False
 
+  def predict(self) -> torch.Tensor:
+    """Predicted pose (mm, deg); in the first cycle the reset pose, as the filter has no measurement yet."""
+    if self._started:
+      self._x = self._x @ self._f.T
+      self._p = self._f @ self._p @ self._f.T + self._q
+    return self._x[:, 0] / self._SI
+
   def update(self, pose_mmdeg: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-    z = torch.as_tensor(pose_mmdeg, dtype=torch.float64) * self._SI
+    predicted_yaw_deg = self._x[5, 0] / self._SI[5]
+    z = align_yaw_branch(torch.as_tensor(pose_mmdeg, dtype=torch.float64), predicted_yaw_deg) * self._SI
     if not self._started:
       self._x[:, 0] = z
       self._p = torch.diag_embed(torch.cat([self._r[:, None], self._rate_var], -1))
       self._started = True
     else:
-      x = self._x @ self._f.T
-      p = self._f @ self._p @ self._f.T + self._q
-      gain = p[:, :, 0] / (p[:, 0, 0] + self._r)[:, None]  # H = [1, 0, ...]
-      self._x = x + gain * (z - x[:, 0])[:, None]
+      innovation = z - self._x[:, 0]
+      innovation[3:5] = torch.remainder(innovation[3:5] + math.pi, 2 * math.pi) - math.pi
+      gain = self._p[:, :, 0] / (self._p[:, 0, 0] + self._r)[:, None]  # H = [1, 0, ...]
+      self._x = self._x + gain * innovation[:, None]
       a = torch.eye(len(self._f), dtype=torch.float64) - gain[:, :, None] * torch.eye(len(self._f), dtype=torch.float64)[0]
-      self._p = a @ p @ a.transpose(1, 2) + self._r[:, None, None] * gain[:, :, None] * gain[:, None, :]  # Joseph form
+      self._p = a @ self._p @ a.transpose(1, 2) + self._r[:, None, None] * gain[:, :, None] * gain[:, None, :]  # Joseph form
     return self._x[:, 0] / self._SI, self._x[:, 1] / self._SI

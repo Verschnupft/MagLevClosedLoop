@@ -17,6 +17,7 @@ from maglevsim.physics import euler_to_rotation_matrix
 from torch import nn
 
 from .. import plant as plant_geometry
+from ..rotation import zyx_euler_deg
 
 Decode = Callable[[torch.Tensor, torch.Tensor], torch.Tensor]
 
@@ -71,14 +72,6 @@ def build_network(model_config: dict) -> nn.Module:
   return PoseMLP(model_config["hidden_dims"], model_config["output_dim"], model_config["activation"], dual_head=True)
 
 
-def _zyx_euler_deg(rotation: torch.Tensor) -> torch.Tensor:
-  """Inverse of `euler_to_rotation_matrix` (R = Rz Ry Rx): `(..., 3, 3)` -> `(..., 3)` roll, pitch, yaw in deg."""
-  roll = torch.atan2(rotation[..., 2, 1], rotation[..., 2, 2])
-  pitch = torch.atan2(-rotation[..., 2, 0], torch.hypot(rotation[..., 0, 0], rotation[..., 1, 0]))
-  yaw = torch.atan2(rotation[..., 1, 0], rotation[..., 0, 0])
-  return torch.rad2deg(torch.stack([roll, pitch, yaw], dim=-1))
-
-
 def _swing(u: torch.Tensor) -> torch.Tensor:
   """Shortest-arc rotation from e_z to the unit vector `u`."""
   ux, uy, uz = u.unbind()
@@ -104,7 +97,7 @@ def decode_unit_vector(uz_from_tilt: bool) -> Decode:
     u = u / u.norm().clamp_min(1e-8)
     tau_deg = torch.rad2deg(torch.atan2(encoded[7], encoded[6]) / 4) + 90.0 * torch.arange(4, dtype=encoded.dtype)
     twist = euler_to_rotation_matrix(torch.stack([torch.zeros(4), torch.zeros(4), tau_deg], -1).to(encoded))
-    angles = _zyx_euler_deg(_swing(u) @ twist)
+    angles = zyx_euler_deg(_swing(u) @ twist)
     yaw_step = torch.remainder(angles[:, 2] - previous_pose[5] + 180.0, 360.0) - 180.0
     best = yaw_step.abs().argmin()
     return torch.cat([encoded[:3], angles[best, :2], (previous_pose[5] + yaw_step[best])[None]])
@@ -116,7 +109,7 @@ class NeuralPoseEstimator:
   """Run a network on the 50-sensor window under the mover; works for any M x N grid.
 
   Input: Hall counts in MagLevSim order `[By, Bx, Bz]`, as in training. Outputs are in the window frame;
-  the window offset converts them to the global frame. The previous pose selects the window and the yaw branch.
+  the window offset converts them to the global frame.
   """
 
   def __init__(
@@ -145,19 +138,14 @@ class NeuralPoseEstimator:
       raise NotImplementedError(f"No decoding for output_dim {output_dim}")
     return cls(plant, network, checkpoint["normalization"], decode)
 
-  def reset(self, initial_pose_mmdeg: torch.Tensor) -> None:
-    self._pose = torch.as_tensor(initial_pose_mmdeg, dtype=torch.float64).clone()
-
-  def estimate(self, hall_counts: torch.Tensor) -> torch.Tensor:
-    offset = plant_geometry.sensor_window_offset_mm(self.plant, self._pose[:2])
+  def estimate(self, hall_counts: torch.Tensor, prior_mmdeg: torch.Tensor, initial_mmdeg: torch.Tensor) -> torch.Tensor:
+    """The window follows `prior_mmdeg`; `initial_mmdeg` selects the yaw branch (as in the MagLevPoseEstimation rollout)."""
+    offset = plant_geometry.sensor_window_offset_mm(self.plant, torch.as_tensor(prior_mmdeg, dtype=torch.float64)[:2])
     window = hall_counts.detach().cpu().reshape(-1, 3)[plant_geometry.sensor_window_indices(self.plant, offset)]
     n = self.normalization
     with torch.no_grad():
       output = self.network((window.reshape(1, -1).float() - n["input_mean"]) / n["input_std"])[0]
     encoded = (output * n["output_std"] + n["output_mean"]).double()
-    previous = self._pose.clone()
-    previous[:2] -= offset
-    pose = self.decode(encoded, previous)
+    pose = self.decode(encoded, torch.as_tensor(initial_mmdeg, dtype=torch.float64))  # only its yaw is used
     pose[:2] += offset
-    self._pose = pose
-    return pose.clone()
+    return pose

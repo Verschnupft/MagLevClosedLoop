@@ -15,6 +15,10 @@ class FiniteDifferenceFilter:
   def reset(self, initial_pose_mmdeg: torch.Tensor) -> None:
     self._previous = torch.as_tensor(initial_pose_mmdeg, dtype=torch.float64)
 
+  def predict(self) -> torch.Tensor:
+    """No motion model: the last pose."""
+    return self._previous
+
   def update(self, pose_mmdeg: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
     pose = torch.as_tensor(pose_mmdeg, dtype=torch.float64)
     velocity = (pose - self._previous) / self.dt_s
@@ -33,6 +37,9 @@ class LowPassDifferenceFilter:
   def reset(self, initial_pose_mmdeg: torch.Tensor) -> None:
     self._difference.reset(initial_pose_mmdeg)
     self._velocity = torch.zeros(6, dtype=torch.float64)
+
+  def predict(self) -> torch.Tensor:
+    return self._difference.predict()
 
   def update(self, pose_mmdeg: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
     pose, raw_velocity = self._difference.update(pose_mmdeg)
