@@ -6,7 +6,8 @@ import torch
 from maglevsim import MagLevSim, ZeroController
 
 from maglevclosedloop.actuation import HalbachDqActuation
-from maglevclosedloop.config import ClosedLoopConfig, KalmanConfig, LowPassConfig
+from maglevclosedloop.config import CascadedPidConfig, ClosedLoopConfig, ImcTuningConfig, KalmanConfig, LowPassConfig
+from maglevclosedloop.control import imc_cascade_gains
 from maglevclosedloop.estimation import GaussNewtonPoseEstimator, NeuralPoseEstimator
 from maglevclosedloop.factory import REPOSITORY_ROOT
 from maglevclosedloop.filtering import FiniteDifferenceFilter, LinearKalmanFilter, LowPassDifferenceFilter
@@ -126,3 +127,11 @@ def test_kalman_filter_has_the_requested_bandwidth(motion_model, expected_gain):
   gain = torch.stack(outputs[steps // 2:]).abs().max()
   # Butterworth poles at the natural frequency plus the filter zeros: |H| = sqrt(3/2) (CV) or sqrt(5/2) (CA) there.
   assert abs(gain - expected_gain) < 0.05
+
+
+def test_imc_reproduces_the_whitebox_velocity_gains():
+  lambdas = (4.761e-3, 4.761e-3, 4.761e-3, 0.8875e-3, 0.8875e-3, 0.1940e-3)  # back-calculated from MagLevWhiteBox kp
+  gains = imc_cascade_gains(ImcTuningConfig(lambda_velocity_s=lambdas), ClosedLoopConfig().plant())
+  whitebox = CascadedPidConfig().velocity_kp
+  for axis in (0, 1, 3, 4, 5):  # MagLevWhiteBox tuned z separately as a PID
+    assert abs(gains.velocity_kp[axis] - whitebox[axis]) < 0.01 * whitebox[axis]

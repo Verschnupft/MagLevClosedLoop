@@ -21,7 +21,7 @@ src/maglevclosedloop/
   compensation/   passthrough.py
   estimation/     gauss_newton.py, neural.py, oracle.py
   filtering/      kalman.py, difference.py (difference, low-pass), bandwidth.py (Q from the controller)
-  control/        cascaded_pid.py
+  control/        cascaded_pid.py, imc.py (gains from the plant and lambda)
   actuation/      halbach_dq.py
 ```
 
@@ -62,7 +62,7 @@ flowchart LR
 | Compensation | `compensate(hall, currents)` | `NoCoilFieldCompensation` (pass-through) | new |
 | Pose estimation | `estimate(hall)` | `GaussNewtonPoseEstimator` or `NeuralPoseEstimator` | MagLevPoseEstimation (finite cuboid model with Hall element offsets; trained networks) |
 | Motion filter | `update(pose)` → pose, velocity | `LinearKalmanFilter` (constant acceleration), `LowPassDifferenceFilter` or `FiniteDifferenceFilter` | MagLevPoseEstimation (`kf_ca_const_*`); low-pass and difference new |
-| Control | `compute(pose, velocity, reference)` | `CascadedPidController` | MagLevWhiteBox (`MimoController`) |
+| Control | `compute(pose, velocity, reference)` | `CascadedPidController`, gains by IMC (`control/imc.py`) | MagLevWhiteBox (`MimoController`, `ImcPidTuning`) |
 | Actuation | `compute(wrench, pose)` | `HalbachDqActuation` | MagLevWhiteBox (`ForceTransform`) |
 
 With `coil_field_in_hall=False` (default) the plant uses `SimConfig.scaling_const_stator = 0`. The Hall data then hold only the mover field; the coil forces stay unchanged. The compensation stage is a pass-through until the coil field is switched on.
@@ -97,6 +97,23 @@ Therefore Q follows the controller by default (`filtering/bandwidth.py`, `Kalman
 R stays the tuned estimator value. `bandwidth_factor=None` uses the tuned `process_psd` instead.
 
 Differences to the tuned setting: the Gauss-Newton estimator here iterates to convergence instead of one Taylor step; the estimators start from their own previous estimate, not from the filter prediction; the yaw branch alignment is not ported.
+
+### Controller tuning
+
+The cascade uses the IMC method of MagLevWhiteBox (`ImcPidTuning`, PT1 case), with the plant taken from the MagLevSim parameters instead of a system identification (`control/imc.py`):
+
+| Step | Rule |
+|---|---|
+| Velocity plant per axis | m dv/dt = F − c v, so G(s) = K / (T s + 1) with K = 1/c, T = m/c (rotation: I, c_w) |
+| Velocity loop (PI) | kp = m / lambda, ki = c / lambda: closed loop 1 / (lambda s + 1) |
+| Position loop (P) | kp = 1 / lambda_position, lambda_position = 5 lambda (MagLevWhiteBox ratio) |
+| Feed-forward | m g on Fz |
+
+With the MagLevWhiteBox lambdas (4.8 ms xy, 0.9 ms tilt, 0.19 ms yaw) the formulas give its gains (test). Those lambdas suit the noise-free plant; with Hall noise the yaw loop (lambda below the 0.25 ms sample time) and the tilt loop amplify the velocity noise until the coils saturate.
+
+`scripts/tune_controller.py` therefore chooses lambda per axis group (xy, z, tilt, yaw) by closed-loop simulation: neural estimator, Kalman filter (Q from the bandwidth rule), 4 counts Hall noise, default scenario (hover, then 2 mm x step). A candidate is feasible when no requested coil command exceeds the MagLevSim limit (19000 increments); the smallest RMS tracking error among feasible candidates wins. Result: lambda = 5 ms (xy, tilt, yaw) and 2 ms (z). For xy the coil limit is the binding constraint.
+
+`controller_tuning=None` uses the explicit `CascadedPidConfig` gains (MagLevWhiteBox values) instead.
 
 ## Neural pose estimation
 
@@ -225,7 +242,7 @@ flowchart TD
   GN --> KF1[KalmanConfig]
   NC --> KF2[KalmanConfig]
   CFG --> LP[LowPassConfig]
-  CFG --> PID[CascadedPidConfig]
+  CFG --> IMC[ImcTuningConfig] --> PID[CascadedPidConfig]
   CFG --> HAL[HalbachActuationConfig]
   FAC["factory.build_closed_loop()"]
   CFG --> FAC

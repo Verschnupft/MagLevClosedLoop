@@ -71,6 +71,18 @@ class CascadedPidConfig:
 
 
 @dataclass(frozen=True)
+class ImcTuningConfig:
+  """IMC design of the cascade (control/imc.py): closed velocity loop 1 / (lambda s + 1) per axis.
+
+  The position loop is `position_to_velocity_ratio` times slower (MagLevWhiteBox: 25 ms / 5 ms).
+  """
+
+  # From scripts/tune_controller.py (neural estimator, Kalman filter, 4 counts Hall noise, default scenario).
+  lambda_velocity_s: Axes = (5e-3, 5e-3, 2e-3, 5e-3, 5e-3, 5e-3)
+  position_to_velocity_ratio: float = 5.0
+
+
+@dataclass(frozen=True)
 class HalbachActuationConfig:
   """Wrench to d/q/phi via the four Halbach arrays. Values from MagLevWhiteBox."""
 
@@ -105,6 +117,8 @@ class ClosedLoopConfig:
   gauss_newton: GaussNewtonConfig = field(default_factory=GaussNewtonConfig)
   neural: NeuralConfig = field(default_factory=NeuralConfig)
   lowpass: LowPassConfig = field(default_factory=LowPassConfig)
+  # Gains from IMC (controller_tuning); None uses the explicit gains in `controller` (MagLevWhiteBox values).
+  controller_tuning: ImcTuningConfig | None = field(default_factory=ImcTuningConfig)
   controller: CascadedPidConfig = field(default_factory=CascadedPidConfig)
   actuation: HalbachActuationConfig = field(default_factory=HalbachActuationConfig)
 
