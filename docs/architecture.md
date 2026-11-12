@@ -46,6 +46,8 @@ flowchart LR
 | Control | `compute(pose, velocity, reference)` | `CascadedPidController` | MagLevWhiteBox (`MimoController`) |
 | Actuation | `compute(wrench, pose)` | `HalbachDqActuation` | MagLevWhiteBox (`ForceTransform`) |
 
+With `coil_field_in_hall=False` (default) the plant uses `SimConfig.scaling_const_stator = 0`. The Hall data then hold only the mover field; the coil forces stay unchanged. The compensation stage is a pass-through until the coil field is switched on.
+
 `OracleEstimator` returns the simulator ground truth (`estimator="oracle"`). Use it to test the other stages without estimation error.
 
 The motion filter supplies the controller with pose and velocity (`motion_filter` switch).

@@ -95,6 +95,7 @@ class ClosedLoopConfig:
   estimator: str = "gauss_newton"  # "gauss_newton", "neural", or "oracle" (simulator ground truth)
   motion_filter: str = "kalman"  # pose and velocity for the controller: "kalman", "lowpass" or "difference"
   sensor_noise_std_counts: float = 4.0
+  coil_field_in_hall: bool = False  # False: Hall data hold only the mover field (forces are unchanged)
   device: str | None = None  # simulator device; None picks CUDA when available
   seed: int = 0
 
@@ -108,6 +109,7 @@ class ClosedLoopConfig:
     return SimConfig(
       grid=GridConfig(rows=self.grid_rows, cols=self.grid_cols),
       sensor_noise_std=self.sensor_noise_std_counts,
+      scaling_const_stator=SimConfig.scaling_const_stator if self.coil_field_in_hall else 0.0,  # coil field in Hall data only
       device=self.device,
       default_hover_pose_mmdeg=self.initial_pose_mmdeg,
     )

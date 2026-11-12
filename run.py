@@ -15,6 +15,7 @@ CONFIG = ClosedLoopConfig(
   ),
   duration_s=0.1,
   estimator="gauss_newton",  # or "neural" (checkpoint in NeuralConfig), or "oracle": simulator ground truth
+  coil_field_in_hall=False,  # True: Hall data also contain the stator coil field (needs a coil-field compensation)
   motion_filter="kalman",  # or "lowpass": low-pass-filtered difference, or "difference": raw backward difference
 )
 
