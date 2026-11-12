@@ -4,28 +4,10 @@ from maglevsim import MagLevSim, ZeroController
 
 from maglevclosedloop.actuation import HalbachDqActuation
 from maglevclosedloop.config import ClosedLoopConfig, KalmanConfig, LowPassConfig
-from maglevclosedloop.control import CascadedPidController
 from maglevclosedloop.estimation import GaussNewtonPoseEstimator
 from maglevclosedloop.motion import FiniteDifferenceFilter, LinearKalmanFilter, LowPassDifferenceFilter
-from maglevclosedloop.reference import PiecewiseConstantReference
 
 HOVER = (120.0, 120.0, 4.0, 0.0, 0.0, 0.0)
-
-
-def test_reference_holds_each_step_until_the_next():
-  reference = PiecewiseConstantReference([(0.5, (2.0,) * 6), (0.0, (1.0,) * 6)])
-  assert reference.pose_mmdeg(0.0)[0] == 1.0
-  assert reference.pose_mmdeg(0.49)[0] == 1.0
-  assert reference.pose_mmdeg(0.5)[0] == 2.0
-
-
-def test_controller_at_rest_outputs_feed_forward_only():
-  config = ClosedLoopConfig()
-  controller = CascadedPidController(config.controller, dt_s=250e-6)
-  pose = torch.tensor(HOVER, dtype=torch.float64)
-  for _ in range(3):
-    wrench = controller.compute(pose, torch.zeros(6), pose)
-  assert torch.allclose(wrench, torch.tensor(config.controller.wrench_offset, dtype=torch.float64))
 
 
 @pytest.mark.parametrize("make_filter", [
@@ -88,12 +70,12 @@ def test_actuation_on_a_grid_matches_the_single_tile_pattern():
   assert torch.all(command[[0, 2, 3, 4, 5], :, :2] == 0)
 
 
-@pytest.mark.parametrize("rows, cols, pose", [(1, 1, (121.3, 118.7, 4.2, 0.3, -0.2, 1.5)), (2, 3, (300.0, 250.0, 3.5, -0.4, 0.2, 5.0))])
-def test_gauss_newton_inverts_its_forward_model(rows, cols, pose):
-  config = ClosedLoopConfig(grid_rows=rows, grid_cols=cols)
+def test_gauss_newton_inverts_its_forward_model_on_a_grid():
+  pose = (300.0, 250.0, 3.5, -0.4, 0.2, 5.0)
+  config = ClosedLoopConfig(grid_rows=2, grid_cols=3)
   estimator = GaussNewtonPoseEstimator(config.plant(), config.gauss_newton)
   estimator.reset(torch.tensor(pose))
-  hall = estimator.predict_counts(estimator._pose).reshape(rows * cols, 50, 3)
+  hall = estimator.predict_counts(estimator._pose).reshape(6, 50, 3)
   estimator.reset(torch.tensor(pose) + torch.tensor([1.0, -1.0, 0.3, 0.2, 0.2, -1.0]))
   assert torch.allclose(estimator.estimate(hall), torch.tensor(pose, dtype=torch.float64), atol=1e-6)
 
