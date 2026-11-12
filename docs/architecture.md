@@ -8,6 +8,25 @@ The repository closes one control loop around the MagLevSim planar motor with th
 Every stage of the loop is exchangeable: Hall-field compensation, pose estimation, motion filtering, control, and actuation.
 A stage depends only on its interface, never on another concrete stage.
 
+## Package layout
+
+```
+src/maglevclosedloop/
+  config.py       ClosedLoopConfig and all stage configs
+  factory.py      default wiring: config -> ClosedLoop
+  loop.py         ClosedLoop: the only place that steps MagLevSim
+  interfaces.py   stage Protocols
+  plant.py        nominal geometry from MagLevSim (sensors, coils, sensor window)
+  reference/      piecewise_constant.py
+  compensation/   passthrough.py
+  estimation/     gauss_newton.py, neural.py, oracle.py
+  filtering/      kalman.py, difference.py (difference, low-pass), bandwidth.py (Q from the controller)
+  control/        cascaded_pid.py
+  actuation/      halbach_dq.py
+```
+
+One subpackage per stage; each exports its implementations in `__init__.py`.
+
 ## Components
 
 ```mermaid
@@ -67,7 +86,16 @@ R describes the estimator, so each estimator config holds its own `KalmanConfig`
 | Neural (log MLP) | `NeuralConfig.kalman` | `kf_ca_const_singleframe_log_mlp_700k` |
 
 The values were fitted in MagLevPoseEstimation on `data/filter_tuning_seed20261029/motion` with 4 counts Hall noise (notebooks `experiments/05_hold_*` and `06_motion_*`): R from the estimator residuals, Q per axis group by minimal rollout RMSE.
-The values minimize the open-loop estimation error. In the closed loop their phase lag is too large: with the oracle estimator and these values the mover falls; with Q scaled by 10^6 it hovers but overshoots (z +0.33 mm). Closed-loop values still need tuning.
+The tuned Q minimizes the open-loop estimation error. In the closed loop its phase lag is too large: the filter bandwidth is about 6–11 Hz, the velocity loops reach about 33 Hz (x, y), 78 Hz (z), 180 Hz (roll, pitch), and 820 Hz (yaw). With the oracle estimator and the tuned Q the mover falls, even in pure hover.
+
+Therefore Q follows the controller by default (`filtering/bandwidth.py`, `KalmanConfig.bandwidth_factor`):
+
+1. Velocity-loop bandwidth per axis: omega_c = kp / m (translation) or kp / I (rotation), from `CascadedPidConfig.velocity_kp` and the MagLevSim mass and inertia.
+2. Filter bandwidth omega_f = `bandwidth_factor` x omega_c, at most a quarter of the Nyquist frequency.
+3. Q = r · dt · omega_f^(2n), n = 2 (CV) or 3 (CA). The steady-state filter then has Butterworth poles at omega_f (checked in the tests).
+
+R stays the tuned estimator value. `bandwidth_factor=None` uses the tuned `process_psd` instead.
+
 Differences to the tuned setting: the Gauss-Newton estimator here iterates to convergence instead of one Taylor step; the estimators start from their own previous estimate, not from the filter prediction; the yaw branch alignment is not ported.
 
 ## Neural pose estimation

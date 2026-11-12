@@ -1,13 +1,16 @@
+import dataclasses
+import math
+
 import pytest
 import torch
 from maglevsim import MagLevSim, ZeroController
 
 from maglevclosedloop.actuation import HalbachDqActuation
 from maglevclosedloop.config import ClosedLoopConfig, KalmanConfig, LowPassConfig
-from maglevclosedloop.estimation import GaussNewtonPoseEstimator
+from maglevclosedloop.estimation import GaussNewtonPoseEstimator, NeuralPoseEstimator
 from maglevclosedloop.factory import REPOSITORY_ROOT
-from maglevclosedloop.motion import FiniteDifferenceFilter, LinearKalmanFilter, LowPassDifferenceFilter
-from maglevclosedloop.neural import NeuralPoseEstimator
+from maglevclosedloop.filtering import FiniteDifferenceFilter, LinearKalmanFilter, LowPassDifferenceFilter
+from maglevclosedloop.filtering.bandwidth import process_psd_for_bandwidth
 
 HOVER = (120.0, 120.0, 4.0, 0.0, 0.0, 0.0)
 
@@ -109,3 +112,17 @@ def test_estimators_match_the_simulator():
     estimator.reset(torch.tensor(pose) + PRIOR_ERROR)
     error = estimator.estimate(sim.state.hall_measurements) - torch.tensor(pose, dtype=torch.float64)
     assert error.abs().max() < tolerance, name
+
+
+@pytest.mark.parametrize("motion_model, expected_gain", [("cv", 1.5**0.5), ("ca", 2.5**0.5)])
+def test_kalman_filter_has_the_requested_bandwidth(motion_model, expected_gain):
+  dt, bandwidth = 250e-6, 200.0  # rad/s; bandwidth * dt << 1, where the rule holds
+  config = KalmanConfig(motion_model=motion_model, bandwidth_factor=None)
+  config = dataclasses.replace(config, process_psd=process_psd_for_bandwidth(torch.full((6,), bandwidth), config, dt))
+  kalman = LinearKalmanFilter(config, dt)
+  kalman.reset(torch.zeros(6))
+  steps = round(20 * 2 * math.pi / bandwidth / dt)  # 20 periods
+  outputs = [kalman.update(torch.full((6,), math.sin(bandwidth * k * dt)))[0][0] for k in range(steps)]
+  gain = torch.stack(outputs[steps // 2:]).abs().max()
+  # Butterworth poles at the natural frequency plus the filter zeros: |H| = sqrt(3/2) (CV) or sqrt(5/2) (CA) there.
+  assert abs(gain - expected_gain) < 0.05

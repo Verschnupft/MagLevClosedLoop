@@ -7,13 +7,12 @@ from .actuation import HalbachDqActuation
 from .compensation import NoCoilFieldCompensation
 from .config import ClosedLoopConfig
 from .control import CascadedPidController
-from .estimation import GaussNewtonPoseEstimator, OracleEstimator
+from .estimation import GaussNewtonPoseEstimator, NeuralPoseEstimator, OracleEstimator
+from .filtering import FiniteDifferenceFilter, LinearKalmanFilter, LowPassDifferenceFilter, kalman_config_for_controller
 from .loop import ClosedLoop
-from .motion import FiniteDifferenceFilter, LinearKalmanFilter, LowPassDifferenceFilter
-from .neural import NeuralPoseEstimator
+from .reference import PiecewiseConstantReference
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
-from .reference import PiecewiseConstantReference
 
 
 def build_closed_loop(config: ClosedLoopConfig) -> ClosedLoop:
@@ -32,8 +31,9 @@ def build_closed_loop(config: ClosedLoopConfig) -> ClosedLoop:
     raise ValueError(f"Unknown estimator {config.estimator!r}")
 
   if config.motion_filter == "kalman":
-    # R and Q belong to the estimator; the oracle uses the Gauss-Newton tuning.
+    # R belongs to the estimator (the oracle uses the Gauss-Newton values); Q may follow the controller.
     kalman = config.neural.kalman if config.estimator == "neural" else config.gauss_newton.kalman
+    kalman = kalman_config_for_controller(kalman, config.controller, plant)
     motion_filter = LinearKalmanFilter(kalman, dt_s=plant.dt)
   elif config.motion_filter == "lowpass":
     motion_filter = LowPassDifferenceFilter(config.lowpass, dt_s=plant.dt)

@@ -1,12 +1,11 @@
-from collections.abc import Callable
 
 import torch
 from maglevsim.config import SimConfig
 from maglevsim.geometry import SENSOR_ELEM_OFFSETS, build_nominal_halbach_mover
 from maglevsim.physics import cuboid_field_exact, euler_to_rotation_matrix
 
-from . import plant as plant_geometry
-from .config import GaussNewtonConfig
+from .. import plant as plant_geometry
+from ..config import GaussNewtonConfig
 
 
 class GaussNewtonPoseEstimator:
@@ -61,16 +60,3 @@ class GaussNewtonPoseEstimator:
   def pose_mmdeg(self) -> torch.Tensor:
     half_mm = torch.tensor([self.plant.grid.array_width_m, self.plant.grid.array_height_m], dtype=torch.float64) * 500.0
     return torch.cat([self._pose[:2] * 1000.0 + half_mm, self._pose[2:3] * 1000.0, torch.rad2deg(self._pose[3:])])
-
-
-class OracleEstimator:
-  """Return the simulator ground truth. Reference for testing the other stages only."""
-
-  def __init__(self, true_pose_mmdeg: Callable[[], torch.Tensor]) -> None:
-    self._true_pose_mmdeg = true_pose_mmdeg
-
-  def reset(self, initial_pose_mmdeg: torch.Tensor) -> None:
-    pass
-
-  def estimate(self, hall_counts: torch.Tensor) -> torch.Tensor:
-    return self._true_pose_mmdeg().detach().to("cpu", torch.float64)

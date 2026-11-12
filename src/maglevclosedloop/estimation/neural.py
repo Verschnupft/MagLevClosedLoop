@@ -16,7 +16,7 @@ from maglevsim.config import SimConfig
 from maglevsim.physics import euler_to_rotation_matrix
 from torch import nn
 
-from . import plant as plant_geometry
+from .. import plant as plant_geometry
 
 Decode = Callable[[torch.Tensor, torch.Tensor], torch.Tensor]
 

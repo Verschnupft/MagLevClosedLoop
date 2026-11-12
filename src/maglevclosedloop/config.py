@@ -19,6 +19,9 @@ class KalmanConfig:
   """
 
   motion_model: str = "ca"  # "cv" (constant velocity) or "ca" (constant acceleration)
+  # Q from the controller (filtering/bandwidth.py): filter bandwidth = factor x velocity-loop bandwidth.
+  # None uses process_psd below, which is tuned for open-loop estimation and lags too much in the closed loop.
+  bandwidth_factor: float | None = 5.0
   process_psd: Axes = (0.0031622776601683794,) * 2 + (3.16227766016838e-05,) + (0.00963284861489642,) * 2 + (2.46740110027234,)
   measurement_std: Axes = (
     1.1056229422976008e-05, 1.101094220165291e-05, 7.978981556683469e-06,

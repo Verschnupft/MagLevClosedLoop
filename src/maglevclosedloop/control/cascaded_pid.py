@@ -1,6 +1,6 @@
 import torch
 
-from .config import CascadedPidConfig
+from ..config import CascadedPidConfig
 
 
 class CascadedPidController:

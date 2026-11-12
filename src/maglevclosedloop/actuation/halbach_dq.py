@@ -1,8 +1,8 @@
 import torch
 from maglevsim.config import SimConfig
 
-from . import plant as plant_geometry
-from .config import HalbachActuationConfig
+from .. import plant as plant_geometry
+from ..config import HalbachActuationConfig
 
 
 class HalbachDqActuation:
