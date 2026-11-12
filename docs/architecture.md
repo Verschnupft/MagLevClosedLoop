@@ -39,7 +39,7 @@ flowchart LR
 |---|---|---|---|
 | Reference | `pose_mmdeg(time_s)` | `PiecewiseConstantReference` | new |
 | Compensation | `compensate(hall, currents)` | `NoCoilFieldCompensation` (pass-through) | new |
-| Pose estimation | `estimate(hall)` | `GaussNewtonPoseEstimator` | MagLevPoseEstimation (finite cuboid model with Hall element offsets) |
+| Pose estimation | `estimate(hall)` | `GaussNewtonPoseEstimator` or `NeuralPoseEstimator` | MagLevPoseEstimation (finite cuboid model with Hall element offsets; trained networks) |
 | Motion filter | `update(pose)` → pose, velocity | `LinearKalmanFilter` (constant velocity), `LowPassDifferenceFilter` or `FiniteDifferenceFilter` | new |
 | Control | `compute(pose, velocity, reference)` | `CascadedPidController` | MagLevWhiteBox (`MimoController`) |
 | Actuation | `compute(wrench, pose)` | `HalbachDqActuation` | MagLevWhiteBox (`ForceTransform`) |
@@ -50,6 +50,36 @@ The motion filter supplies the controller with pose and velocity (`motion_filter
 `FiniteDifferenceFilter` passes the pose through and differentiates it; this amplifies estimation noise.
 `LowPassDifferenceFilter` smooths that difference with a first-order low-pass (`cutoff_hz`); the pose stays unfiltered.
 `LinearKalmanFilter` estimates pose and velocity per axis with a constant-velocity model and smooths the noise.
+
+## Neural pose estimation
+
+`NeuralPoseEstimator` runs a network trained in MagLevPoseEstimation. It has three exchangeable parts:
+
+```mermaid
+flowchart LR
+  H["Hall counts (T,50,3)"] --> W["sensor window<br/>50 sensors under the mover<br/>(plant.py)"]
+  W --> N["input standardization"] --> NET["network<br/>(any nn.Module)"] --> D["output de-standardization"] --> DEC["decode<br/>(any callable)"]
+  DEC --> P["pose (6,) + window offset"]
+  PREV["previous pose"] --> W
+  PREV --> DEC
+```
+
+| Part | Source | Default |
+|---|---|---|
+| Network architecture | checkpoint `model` (kind, hidden dims, activation, head) | `PoseMLP`; other kinds raise `NotImplementedError` until ported |
+| Weights | checkpoint `state_dict` | loaded strictly |
+| Input/output normalization | checkpoint `normalization` | per-component Hall statistics, per-output statistics |
+| Output decoding | checkpoint `model.output_dim` and `data.uz_from_tilt` | 8 outputs: body z-axis and 4-fold twist, yaw branch from the previous pose |
+| Sensor window | fixed: MagLevSim sensor lattice | window centre nearest the previous pose; works on any M x N grid |
+| Hall units and axis order | fixed: training convention | counts, `[By, Bx, Bz]`, no coil field |
+
+`NeuralPoseEstimator.from_checkpoint` reads everything from the checkpoint. To customize, construct `NeuralPoseEstimator(plant, network, normalization, decode)` directly with another network or decoder.
+
+Checkpoints live in `checkpoints/`. `scripts/slim_checkpoint.py` reduces a training checkpoint from MagLevPoseEstimation to the inference part and keeps the run name for provenance.
+`checkpoints/logmlp_seed42.pt` is run `final_logmlp_mlp_2048-2048-1024_lr1e-4_cosine1000_seed42_1m` (best model, epoch 1000).
+
+A neural estimator inside a Kalman filter is the combination `estimator="neural"` and `motion_filter="kalman"`.
+Set `KalmanConfig.measurement_std` to the network error (test RMSE of this checkpoint: about 0.015 mm and 0.015 deg).
 
 ## Interfaces
 
@@ -94,6 +124,7 @@ classDiagram
   CoilFieldCompensation <|.. NoCoilFieldCompensation
   PoseEstimator <|.. GaussNewtonPoseEstimator
   PoseEstimator <|.. OracleEstimator
+  PoseEstimator <|.. NeuralPoseEstimator
   MotionFilter <|.. LinearKalmanFilter
   MotionFilter <|.. LowPassDifferenceFilter
   MotionFilter <|.. FiniteDifferenceFilter
@@ -144,6 +175,7 @@ flowchart TD
   CFG["ClosedLoopConfig<br/>(run.py)"]
   CFG -- "plant()" --> PLANT["maglevsim.SimConfig<br/>grid, noise, device, initial pose"]
   CFG --> GN[GaussNewtonConfig]
+  CFG --> NC[NeuralConfig]
   CFG --> KF[KalmanConfig]
   CFG --> LP[LowPassConfig]
   CFG --> PID[CascadedPidConfig]
@@ -174,7 +206,8 @@ Units change only inside a stage. `plant.py` is the only module that uses MagLev
 
 No stage is limited to one tile:
 
-- The estimator uses the sensors of all tiles in one least-squares problem.
+- The Gauss-Newton estimator uses the sensors of all tiles in one least-squares problem.
+- The neural estimator uses the 50-sensor window under the mover, which can span tiles.
 - The actuation checks the coils of all tiles against the four Halbach arrays.
 - The motion filter and the controller work on the global pose only.
 

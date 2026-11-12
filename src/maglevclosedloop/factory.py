@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import torch
 from maglevsim import MagLevSim, ZeroController
 
@@ -8,6 +10,9 @@ from .control import CascadedPidController
 from .estimation import GaussNewtonPoseEstimator, OracleEstimator
 from .loop import ClosedLoop
 from .motion import FiniteDifferenceFilter, LinearKalmanFilter, LowPassDifferenceFilter
+from .neural import NeuralPoseEstimator
+
+REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 from .reference import PiecewiseConstantReference
 
 
@@ -19,6 +24,8 @@ def build_closed_loop(config: ClosedLoopConfig) -> ClosedLoop:
 
   if config.estimator == "gauss_newton":
     estimator = GaussNewtonPoseEstimator(plant, config.gauss_newton)
+  elif config.estimator == "neural":
+    estimator = NeuralPoseEstimator.from_checkpoint(plant, REPOSITORY_ROOT / config.neural.checkpoint_path)
   elif config.estimator == "oracle":
     estimator = OracleEstimator(sim.actual_pose_global_mmdeg)
   else:

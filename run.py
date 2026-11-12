@@ -14,7 +14,7 @@ CONFIG = ClosedLoopConfig(
     (0.05, (122.0, 120.0, 4.0, 0.0, 0.0, 0.0)),
   ),
   duration_s=0.1,
-  estimator="gauss_newton",  # or "oracle": simulator ground truth as pose feedback
+  estimator="gauss_newton",  # or "neural" (checkpoint in NeuralConfig), or "oracle": simulator ground truth
   motion_filter="kalman",  # or "lowpass": low-pass-filtered difference, or "difference": raw backward difference
 )
 

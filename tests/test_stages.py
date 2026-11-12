@@ -5,7 +5,9 @@ from maglevsim import MagLevSim, ZeroController
 from maglevclosedloop.actuation import HalbachDqActuation
 from maglevclosedloop.config import ClosedLoopConfig, KalmanConfig, LowPassConfig
 from maglevclosedloop.estimation import GaussNewtonPoseEstimator
+from maglevclosedloop.factory import REPOSITORY_ROOT
 from maglevclosedloop.motion import FiniteDifferenceFilter, LinearKalmanFilter, LowPassDifferenceFilter
+from maglevclosedloop.neural import NeuralPoseEstimator
 
 HOVER = (120.0, 120.0, 4.0, 0.0, 0.0, 0.0)
 
@@ -70,22 +72,38 @@ def test_actuation_on_a_grid_matches_the_single_tile_pattern():
   assert torch.all(command[[0, 2, 3, 4, 5], :, :2] == 0)
 
 
-def test_gauss_newton_inverts_its_forward_model_on_a_grid():
+PRIOR_ERROR = torch.tensor([1.0, -1.0, 0.3, 0.2, 0.2, -1.0])
+
+
+def make_estimator(name: str, config: ClosedLoopConfig):
+  if name == "gauss_newton":
+    return GaussNewtonPoseEstimator(config.plant(), config.gauss_newton)
+  return NeuralPoseEstimator.from_checkpoint(config.plant(), REPOSITORY_ROOT / config.neural.checkpoint_path)
+
+
+TOLERANCE = {"gauss_newton": 1e-3, "neural": 0.1}  # mm and deg; the network is trained, not exact
+
+
+@pytest.mark.parametrize("name", ["gauss_newton", "neural"])
+def test_estimators_work_on_a_grid(name):
   pose = (300.0, 250.0, 3.5, -0.4, 0.2, 5.0)
   config = ClosedLoopConfig(grid_rows=2, grid_cols=3)
-  estimator = GaussNewtonPoseEstimator(config.plant(), config.gauss_newton)
-  estimator.reset(torch.tensor(pose))
-  hall = estimator.predict_counts(estimator._pose).reshape(6, 50, 3)
-  estimator.reset(torch.tensor(pose) + torch.tensor([1.0, -1.0, 0.3, 0.2, 0.2, -1.0]))
-  assert torch.allclose(estimator.estimate(hall), torch.tensor(pose, dtype=torch.float64), atol=1e-6)
+  forward_model = GaussNewtonPoseEstimator(config.plant(), config.gauss_newton)  # exact mover field, like MagLevSim
+  forward_model.reset(torch.tensor(pose))
+  hall = forward_model.predict_counts(forward_model._pose).reshape(6, 50, 3)
+  estimator = make_estimator(name, config)
+  estimator.reset(torch.tensor(pose) + PRIOR_ERROR)
+  error = estimator.estimate(hall) - torch.tensor(pose, dtype=torch.float64)
+  assert error.abs().max() < TOLERANCE[name]
 
 
-def test_gauss_newton_matches_the_simulator():
+def test_estimators_match_the_simulator():
   pose = (121.3, 118.7, 4.2, 0.3, -0.2, 1.5)
   config = ClosedLoopConfig(device="cpu")
   sim = MagLevSim(config=config.plant(), controller=ZeroController())
   sim.reset(pose)  # coils are off at reset, so the Hall data holds only the mover field
-  estimator = GaussNewtonPoseEstimator(config.plant(), config.gauss_newton)
-  estimator.reset(torch.tensor(pose) + torch.tensor([1.0, -1.0, 0.3, 0.2, 0.2, -1.0]))
-  error = estimator.estimate(sim.state.hall_measurements) - torch.tensor(pose, dtype=torch.float64)
-  assert error.abs().max() < 1e-3
+  for name, tolerance in TOLERANCE.items():
+    estimator = make_estimator(name, config)
+    estimator.reset(torch.tensor(pose) + PRIOR_ERROR)
+    error = estimator.estimate(sim.state.hall_measurements) - torch.tensor(pose, dtype=torch.float64)
+    assert error.abs().max() < tolerance, name

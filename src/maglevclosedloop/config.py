@@ -16,6 +16,11 @@ class GaussNewtonConfig:
 
 
 @dataclass(frozen=True)
+class NeuralConfig:
+  checkpoint_path: str = "checkpoints/logmlp_seed42.pt"  # relative to the repository root, or absolute
+
+
+@dataclass(frozen=True)
 class KalmanConfig:
   """Constant-velocity Kalman filter. Units per axis: mm or deg. Untuned starting values."""
 
@@ -68,13 +73,14 @@ class ClosedLoopConfig:
     (0.05, (122.0, 120.0, 4.0, 0.0, 0.0, 0.0)),
   )
   duration_s: float = 0.1
-  estimator: str = "gauss_newton"  # "gauss_newton" or "oracle" (simulator ground truth)
+  estimator: str = "gauss_newton"  # "gauss_newton", "neural", or "oracle" (simulator ground truth)
   motion_filter: str = "kalman"  # pose and velocity for the controller: "kalman", "lowpass" or "difference"
   sensor_noise_std_counts: float = 0.0
   device: str | None = None  # simulator device; None picks CUDA when available
   seed: int = 0
 
   gauss_newton: GaussNewtonConfig = field(default_factory=GaussNewtonConfig)
+  neural: NeuralConfig = field(default_factory=NeuralConfig)
   kalman: KalmanConfig = field(default_factory=KalmanConfig)
   lowpass: LowPassConfig = field(default_factory=LowPassConfig)
   controller: CascadedPidConfig = field(default_factory=CascadedPidConfig)
